@@ -70,7 +70,6 @@ mctsrresult_df = pd.DataFrame(mctsr_data)
 mctsrresult_df.to_excel("mctsr_result.xlsx")
 
 
-
 ## method 4: MCTSr with importance sampling
 mctsr_is_score, mctsr_is_results, mctsr_is_answ_label = evaluate(MCTSr(policy=Policy.IMPORTANCE_SAMPLING, samples_per_node=5, default_uct_score=1e8))
 mctsr_is_data = [(dict(example) | {"prediction": prediction, "correct": score}) for example, prediction, score in mctsr_is_results]
