@@ -1,15 +1,13 @@
 # Copyright (c) 2024 Magik Compute Pte. Ltd. All rights reserved.
 import os
 import math
-import random
+import requests
 import numpy as np
-from enum import Enum
 from collections import deque
 from collections.abc import Generator
 from abc import ABC, ABCMeta, abstractmethod
 from typing import Any, Generic, TypeVar
 from action import load_llm_config, MCTSAgent
-from evaluator import MathRMEvaluator
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5"  # For 4090*6
 
@@ -62,8 +60,8 @@ class MCTS(ABC):
                  c: float = 1.414, 
                  max_children: int = 2,
                  eps: float = 1e-8,
-                 reward_ub: int = 95,
-                 reward_penalty: int = 50,
+                 reward_ub: int = 10,
+                 reward_penalty: int = 0.,
                  default_uct_score: float = 1000,
                  dummy_answer: str = "I don't know.",
                  policy: str = 'GREEDY',
@@ -91,10 +89,12 @@ class MCTS(ABC):
         llm_cfg,_ = load_llm_config('http://localhost:8001/v1')
 
         self.agent = MCTSAgent(llm_cfg)
-        self.evaluator = MathRMEvaluator(model_name='/data0/ckpt/Qwen/Qwen2.5-Math-RM-72B')
+        self.evaluator_url = "http://localhost:8110/get_score"
 
-        # self.critique = dspy.TypedChainOfThought(CritiqueAnswer)
-        # self.refine = dspy.TypedChainOfThought(RefineAnswer)
+    def calc_score(self, sys_prompt: str="", question: str="", response: str=""):
+        payload = {'sys_prompt': sys_prompt,'question': question, 'response': response}
+        r = requests.post(self.evaluator_url, json=payload, timeout=1000)
+        return r.json()['score']
 
     def initialize(self, S: State) -> TreeNode:
         if self.initialize_strategy == 'ZERO_SHOT':
@@ -124,15 +124,15 @@ class MCTS(ABC):
     def get_next_state(self, S: State, action=None) -> State:
         cot_answer = self.get_actions(S=S, action='CoT')
         tir_answer = self.get_actions(S=S, action='TIR')
-        cot_score = self.evaluator.calc_score(sys_prompt=self.agent.cot_prompt, question=S.problem, response=cot_answer)
-        tir_score = self.evaluator.calc_score(sys_prompt=self.agent.tir_prompt, question=S.problem, response=tir_answer)
+        cot_score = self.calc_score(sys_prompt=self.agent.cot_prompt, question=S.problem, response=cot_answer)
+        tir_score = self.calc_score(sys_prompt=self.agent.tir_prompt, question=S.problem, response=tir_answer)
 
         current_answer = cot_answer if cot_score > tir_score else tir_answer
         S_next = State(problem=S.problem, answer=current_answer)
         return S_next
 
     def get_reward(self, S: State) -> int:
-        reward = self.evaluator.calc_score(question=S.problem, response=S.answer)
+        reward = self.calc_score(question=S.problem, response=S.answer)
         return min(reward, self.reward_ub) - self.reward_penalty if reward > self.reward_ub else reward
     
     def search(self, S: State) -> State:
@@ -172,7 +172,7 @@ class MCTS(ABC):
 
     def simulate(self, node: TreeNode) -> list[int]:
         rewards = [self.get_reward(S=node.state) for _ in range(self.samples_per_node)]
-        node.update(np.mean(rewards))
+        # node.update(np.mean(rewards))
         return rewards
 
     def backpropagate(self, node: TreeNode, rewards: list[int] = None):
@@ -204,5 +204,6 @@ def test_mcts(problem: str):
     print(answer)
 
 if __name__ == '__main__':
-    problem = "Alice has 3 sisters and she also has 4 brothers. How many sisters does Alice’s brother have?"
+    # problem = "Alice has 3 sisters and she also has 4 brothers. How many sisters does Alice’s brother have?"
+    problem = "A box contains m black balls and n white balls. Each time I draw a white ball, I do not return it to the box. Conversely, if I draw a black ball, I return it to the box. What is the expected time to draw all n white balls?"
     test_mcts(problem)

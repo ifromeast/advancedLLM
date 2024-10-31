@@ -1,6 +1,20 @@
+import os
+import sys
+import json
+import asyncio
+import argparse
+from collections import OrderedDict
+from typing import Optional, Set, List
+from contextlib import asynccontextmanager
+import fastapi
+import uvicorn
+from fastapi import Request
+
 import torch
 from transformers import AutoModel, AutoTokenizer
 from transformers import BitsAndBytesConfig
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5"  # For 4090*6
 
 class MathRMEvaluator:
     def __init__(self, model_name: str) -> None:
@@ -36,3 +50,34 @@ class MathRMEvaluator:
         torch.cuda.empty_cache()
         score = outputs[0].cpu().detach().numpy()[0][0]
         return score
+
+
+_running_tasks: Set[asyncio.Task] = set()
+
+@asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
+    async def _force_log():
+        while True:
+            await asyncio.sleep(10)
+
+    task = asyncio.create_task(_force_log())
+    _running_tasks.add(task)
+    task.add_done_callback(_running_tasks.remove)
+    yield
+
+app = fastapi.FastAPI(lifespan=lifespan)
+
+evaluator = MathRMEvaluator(model_name='/data0/ckpt/Qwen/Qwen2.5-Math-RM-72B')
+
+@app.post("/get_score")
+async def chat(request: Request):
+    params = await request.json()
+    system_prompt = params.get("sys_prompt", "")
+    question = params.get("question", "")
+    response = params.get("response", "")
+    score = evaluator.calc_score(sys_prompt=system_prompt, question=question, response=response)
+    return {"score": float(score)}
+
+if __name__ == '__main__':
+    
+    uvicorn.run(app, host='0.0.0.0', port=8110)
